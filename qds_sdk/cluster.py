@@ -7,111 +7,97 @@ from qds_sdk.qubole import Qubole
 from qds_sdk.resource import Resource
 from argparse import ArgumentParser
 
+import sys
 import logging
 import json
 
 log = logging.getLogger("qds_cluster")
 
-
 def str2bool(v):
     return v.lower() in ("yes", "true", "t", "1")
 
 
-class Cluster(Resource):
+class ClusterCmdLine:
     """
-    qds_sdk.Cluster is the class for retrieving and manipulating cluster
-    information.
+    qds_sdk.ClusterCmdLine is the interface used by qds.py.
     """
 
-    rest_entity_path = "clusters"
+    @staticmethod
+    def run(args):
+        parser = ClusterCmdLine.parsers()
+        parsed = parser.parse_args(args)
+        return parsed.func(parsed)
 
-    @classmethod
-    def _parse_list(cls, args):
-        """
-        Parse command line arguments to construct a dictionary of cluster
-        parameters that can be used to determine which clusters to list.
+    @staticmethod
+    def parsers():
+        argparser = ArgumentParser(prog="qds.py cluster",
+                description="Cluster client for Qubole Data Service.")
+        subparsers = argparser.add_subparsers(title="cluster actions")
 
-        Args:
-            `args`: sequence of arguments
+        cluster_create = subparsers.add_parser("create",
+                description="create a new cluster")
+        ClusterCmdLine._parse_create_update(cluster_create, "create")
+        cluster_create.set_defaults(func=ClusterCmdLine.cluster_create_action)
 
-        Returns:
-            Dictionary that can be used to determine which clusters to list
-        """
-        argparser = ArgumentParser(prog="cluster list")
+        cluster_update = subparsers.add_parser("update",
+                description="update the settings of an existing cluster")
+        ClusterCmdLine._parse_create_update(cluster_update, "update")
+        cluster_update.set_defaults(func=ClusterCmdLine.cluster_update_action)
 
-        group = argparser.add_mutually_exclusive_group()
+        cluster_clone = subparsers.add_parser("clone",
+                description="clone a cluster from an existing one")
+        ClusterCmdLine._parse_create_update(cluster_clone, "clone")
+        cluster_clone.set_defaults(func=ClusterCmdLine.cluster_clone_action)
 
+        cluster_list = subparsers.add_parser("list",
+                description="list existing cluster(s)")
+        group = cluster_list.add_mutually_exclusive_group()
         group.add_argument("--id", dest="cluster_id",
-                           help="show cluster with this id")
-
+                help="show cluster with this id")
         group.add_argument("--label", dest="label",
-                           help="show cluster with this label")
-
+                help="show cluster with this label")
         group.add_argument("--state", dest="state", action="store",
-                           choices=['up', 'down', 'pending', 'terminating'],
-                           help="list only clusters in the given state")
+                choices=['up', 'down', 'pending', 'terminating'],
+                help="list only clusters in the given state")
+        cluster_list.set_defaults(func=ClusterCmdLine.cluster_list_action)
 
-        arguments = argparser.parse_args(args)
-        return vars(arguments)
+        cluster_delete = subparsers.add_parser("delete",
+                description="delete an existing cluster")
+        cluster_delete.add_argument("cluster_id_or_label",
+                help="id/label of the cluster")
+        cluster_delete.set_defaults(func=ClusterCmdLine.cluster_delete_action)
 
-    @classmethod
-    def list(cls, state=None):
-        """
-        List existing clusters present in your account.
+        cluster_start = subparsers.add_parser("start",
+                description="start an existing cluster")
+        cluster_start.add_argument("cluster_id_or_label",
+                help="id/label of the cluster")
+        cluster_start.set_defaults(func=ClusterCmdLine.cluster_start_action)
 
-        Kwargs:
-            `state`: list only those clusters which are in this state
+        cluster_terminate = subparsers.add_parser("terminate",
+                description="terminate a running cluster")
+        cluster_terminate.add_argument("cluster_id_or_label",
+                help="id/label of the cluster")
+        cluster_terminate.set_defaults(func=ClusterCmdLine.cluster_terminate_action)
 
-        Returns:
-            List of clusters satisfying the given criteria
-        """
-        conn = Qubole.agent()
-        if state is None:
-            return conn.get(cls.rest_entity_path)
-        elif state is not None:
-            cluster_list = conn.get(cls.rest_entity_path)
-            result = []
-            for cluster in cluster_list:
-                if state.lower() == cluster['cluster']['state'].lower():
-                    result.append(cluster)
-            return result
+        cluster_status = subparsers.add_parser("status",
+                description="show whether the cluster is up or down")
+        cluster_status.add_argument("cluster_id_or_label",
+                help="id/label of the cluster")
+        cluster_status.set_defaults(func=ClusterCmdLine.cluster_status_action)
 
-    @classmethod
-    def show(cls, cluster_id_label):
-        """
-        Show information about the cluster with id/label `cluster_id_label`.
-        """
-        conn = Qubole.agent()
-        return conn.get(cls.element_path(cluster_id_label))
+        cluster_reassign_label = subparsers.add_parser("reassign_label",
+                description="reassign label from one cluster to another")
+        cluster_reassign_label.add_argument("destination_cluster",
+                metavar="destination_cluster_id_label",
+                help="id/label of the cluster to move the label to")
+        cluster_reassign_label.add_argument("label",
+                help="label to be moved from the source cluster")
+        cluster_reassign_label.set_defaults(func=ClusterCmdLine.cluster_reassign_label_action)
 
-    @classmethod
-    def status(cls, cluster_id_label):
-        """
-        Show the status of the cluster with id/label `cluster_id_label`.
-        """
-        conn = Qubole.agent()
-        return conn.get(cls.element_path(cluster_id_label) + "/state")
+        return argparser
 
-    @classmethod
-    def start(cls, cluster_id_label):
-        """
-        Start the cluster with id/label `cluster_id_label`.
-        """
-        conn = Qubole.agent()
-        data = {"state": "start"}
-        return conn.put(cls.element_path(cluster_id_label) + "/state", data)
-
-    @classmethod
-    def terminate(cls, cluster_id_label):
-        """
-        Terminate the cluster with id/label `cluster_id_label`.
-        """
-        conn = Qubole.agent()
-        data = {"state": "terminate"}
-        return conn.put(cls.element_path(cluster_id_label) + "/state", data)
-
-    @classmethod
-    def _parse_create_update(cls, args, action):
+    @staticmethod
+    def _parse_create_update(argparser, action):
         """
         Parse command line arguments to determine cluster parameters that can
         be used to create or update a cluster.
@@ -124,8 +110,6 @@ class Cluster(Resource):
         Returns:
             Object that contains cluster parameters
         """
-        argparser = ArgumentParser(prog="cluster %s" % action)
-
         create_required = False
         label_required = False
 
@@ -332,8 +316,196 @@ class Cluster(Resource):
                                e.g. --custom-ec2-tags '{"key1":"value1", "key2":"value2"}'
                                """,)
 
-        arguments = argparser.parse_args(args)
-        return arguments
+    @staticmethod
+    def cluster_create_action(args):
+        cluster_info = ClusterCmdLine._create_cluster_info(args)
+        return Cluster.create(cluster_info.minimal_payload())
+
+    @staticmethod
+    def cluster_update_action(args):
+        cluster_info = ClusterCmdLine._create_cluster_info(args)
+        return Cluster.update(args.cluster_id_label, cluster_info.minimal_payload())
+
+    @staticmethod
+    def cluster_clone_action(args):
+        cluster_info = ClusterCmdLine._create_cluster_info(args)
+        return Cluster.clone(args.cluster_id_label, cluster_info.minimal_payload())
+
+    @staticmethod
+    def _create_cluster_info(arguments):
+        cluster_info = ClusterInfo(arguments.label,
+                                   arguments.aws_access_key_id,
+                                   arguments.aws_secret_access_key,
+                                   arguments.disallow_cluster_termination,
+                                   arguments.enable_ganglia_monitoring,
+                                   arguments.node_bootstrap_file,)
+
+        cluster_info.set_ec2_settings(arguments.aws_region,
+                                      arguments.aws_availability_zone,
+                                      arguments.vpc_id,
+                                      arguments.subnet_id)
+
+        custom_config = None
+        if arguments.custom_config_file is not None:
+            try:
+                custom_config = open(arguments.custom_config_file).read()
+            except IOError as e:
+                sys.stderr.write("Unable to read custom config file: %s\n" %
+                                 str(e))
+                sys.exit(1)
+
+        cluster_info.set_hadoop_settings(arguments.master_instance_type,
+                                         arguments.slave_instance_type,
+                                         arguments.initial_nodes,
+                                         arguments.max_nodes,
+                                         custom_config,
+                                         arguments.slave_request_type,
+                                         arguments.use_hbase,
+                                         arguments.custom_ec2_tags)
+
+        cluster_info.set_spot_instance_settings(
+              arguments.maximum_bid_price_percentage,
+              arguments.timeout_for_request,
+              arguments.maximum_spot_instance_percentage)
+
+        cluster_info.set_stable_spot_instance_settings(
+              arguments.stable_maximum_bid_price_percentage,
+              arguments.stable_timeout_for_request,
+              arguments.stable_allow_fallback)
+
+        fairscheduler_config_xml = None
+        if arguments.fairscheduler_config_xml_file is not None:
+            try:
+                fairscheduler_config_xml = open(arguments.fairscheduler_config_xml_file).read()
+            except IOError as e:
+                sys.stderr.write("Unable to read config xml file: %s\n" %
+                                 str(e))
+                sys.exit(1)
+        cluster_info.set_fairscheduler_settings(fairscheduler_config_xml,
+                                                arguments.default_pool)
+
+        customer_ssh_key = None
+        if arguments.customer_ssh_key_file is not None:
+            try:
+                customer_ssh_key = open(arguments.customer_ssh_key_file).read()
+            except IOError as e:
+                sys.stderr.write("Unable to read customer ssh key file: %s\n" %
+                                 str(e))
+                sys.exit(1)
+        cluster_info.set_security_settings(arguments.encrypted_ephemerals,
+                                           customer_ssh_key)
+
+        presto_custom_config = None
+        if arguments.presto_custom_config_file is not None:
+            try:
+                presto_custom_config = open(arguments.presto_custom_config_file).read()
+            except IOError as e:
+                sys.stderr.write("Unable to read presto custom config file: %s\n" %
+                                 str(e))
+                sys.exit(1)
+        cluster_info.set_presto_settings(arguments.enable_presto,
+                                         presto_custom_config)
+
+        return cluster_info
+
+    @staticmethod
+    def cluster_delete_action(args):
+        return Cluster.delete(args.cluster_id_or_label)
+
+    @staticmethod
+    def cluster_list_action(args):
+        arguments = vars(args)
+        if arguments['cluster_id'] is not None:
+            result = Cluster.show(arguments['cluster_id'])
+        elif arguments['label'] is not None:
+            result = Cluster.show(arguments['label'])
+        elif arguments['state'] is not None:
+            result = Cluster.list(state=arguments['state'])
+        else:
+            result = Cluster.list()
+        return result
+
+    @staticmethod
+    def cluster_start_action(args):
+        return Cluster.start(args.cluster_id_or_label)
+
+    @staticmethod
+    def cluster_terminate_action(args):
+        return Cluster.terminate(args.cluster_id_or_label)
+
+    @staticmethod
+    def cluster_status_action(args):
+        return Cluster.status(args.cluster_id_or_label)
+
+    @staticmethod
+    def cluster_reassign_label_action(args):
+        return Cluster.reassign_label(args.destination_cluster, args.label)
+
+
+class Cluster(Resource):
+    """
+    qds_sdk.Cluster is the class for retrieving and manipulating cluster
+    information.
+    """
+
+    rest_entity_path = "clusters"
+
+    @classmethod
+    def list(cls, state=None):
+        """
+        List existing clusters present in your account.
+
+        Kwargs:
+            `state`: list only those clusters which are in this state
+
+        Returns:
+            List of clusters satisfying the given criteria
+        """
+        conn = Qubole.agent()
+        if state is None:
+            return conn.get(cls.rest_entity_path)
+        elif state is not None:
+            cluster_list = conn.get(cls.rest_entity_path)
+            result = []
+            for cluster in cluster_list:
+                if state.lower() == cluster['cluster']['state'].lower():
+                    result.append(cluster)
+            return result
+
+    @classmethod
+    def show(cls, cluster_id_label):
+        """
+        Show information about the cluster with id/label `cluster_id_label`.
+        """
+        conn = Qubole.agent()
+        return conn.get(cls.element_path(cluster_id_label))
+
+    @classmethod
+    def status(cls, cluster_id_label):
+        """
+        Show the status of the cluster with id/label `cluster_id_label`.
+        """
+        conn = Qubole.agent()
+        return conn.get(cls.element_path(cluster_id_label) + "/state")
+
+    @classmethod
+    def start(cls, cluster_id_label):
+        """
+        Start the cluster with id/label `cluster_id_label`.
+        """
+        conn = Qubole.agent()
+        data = {"state": "start"}
+        return conn.put(cls.element_path(cluster_id_label) + "/state", data)
+
+    @classmethod
+    def terminate(cls, cluster_id_label):
+        """
+        Terminate the cluster with id/label `cluster_id_label`.
+        """
+        conn = Qubole.agent()
+        data = {"state": "terminate"}
+        return conn.put(cls.element_path(cluster_id_label) + "/state", data)
+
 
     @classmethod
     def create(cls, cluster_info):
@@ -360,23 +532,6 @@ class Cluster(Resource):
         """
         conn = Qubole.agent()
         return conn.post(cls.element_path(cluster_id_label) + '/clone', data=cluster_info)
-
-    @classmethod
-    def _parse_reassign_label(cls, args):
-        """
-        Parse command line arguments for reassigning label.
-        """
-        argparser = ArgumentParser(prog="cluster reassign_label")
-
-        argparser.add_argument("destination_cluster",
-                metavar="destination_cluster_id_label",
-                help="id/label of the cluster to move the label to")
-
-        argparser.add_argument("label",
-                help="label to be moved from the source cluster")
-
-        arguments = argparser.parse_args(args)
-        return arguments
 
     @classmethod
     def reassign_label(cls, destination_cluster, label):
